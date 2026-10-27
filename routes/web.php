@@ -4,68 +4,113 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
+
+// FUNGSI STATUS STOK
+function statusStok(int $stok): string
+{
+    if ($stok <= 0) {
+        return 'Habis';
+    }
+
+    if ($stok <= 5) {
+        return 'Menipis';
+    }
+
+    return 'Tersedia';
+}
+
+
 // READ + PENCARIAN + FILTER
-Route::get('/mahasiswa', function (Request $request) {
+Route::get('/produk', function (Request $request) {
+
     $kataKunci = trim((string) $request->query('q', ''));
-    $programStudiId = $request->query('program_studi_id', '');
+    $kategoriProdukId = $request->query(
+        'kategori_produk_id',
+        ''
+    );
 
     try {
+
         $pdo = DB::connection()->getPdo();
 
-        $sql = 'SELECT m.id, m.nim, m.nama, m.email, m.usia,
-                       m.program_studi_id, p.nama_prodi
-                FROM mahasiswa AS m
-                JOIN program_studi AS p
-                  ON p.id = m.program_studi_id
+        $sql = 'SELECT pr.id,
+                       pr.kode_produk,
+                       pr.nama_produk,
+                       pr.sku,
+                       pr.stok,
+                       pr.kategori_produk_id,
+                       kp.nama_kategori
+                FROM produk AS pr
+                JOIN kategori_produk AS kp
+                  ON kp.id = pr.kategori_produk_id
                 WHERE 1 = 1';
 
         $parameter = [];
 
+        // PENCARIAN
         if ($kataKunci !== '') {
-            $sql .= ' AND (m.nim LIKE :kata_kunci_nim
-                       OR m.nama LIKE :kata_kunci_nama
-                       OR m.email LIKE :kata_kunci_email)';
+
+            $sql .= ' AND (
+                pr.kode_produk LIKE :kode_produk
+                OR pr.nama_produk LIKE :nama_produk
+                OR pr.sku LIKE :sku
+            )';
 
             $nilaiPencarian = '%' . $kataKunci . '%';
 
-            $parameter['kata_kunci_nim'] = $nilaiPencarian;
-            $parameter['kata_kunci_nama'] = $nilaiPencarian;
-            $parameter['kata_kunci_email'] = $nilaiPencarian;
+            $parameter['kode_produk'] = $nilaiPencarian;
+            $parameter['nama_produk'] = $nilaiPencarian;
+            $parameter['sku'] = $nilaiPencarian;
         }
 
-        if ($programStudiId !== '') {
-            $sql .= ' AND m.program_studi_id = :program_studi_id';
-            $parameter['program_studi_id'] = (int) $programStudiId;
+
+        // FILTER KATEGORI
+        if ($kategoriProdukId !== '') {
+
+            $sql .= ' AND pr.kategori_produk_id =
+                      :kategori_produk_id';
+
+            $parameter['kategori_produk_id'] =
+                (int) $kategoriProdukId;
         }
 
-        $sql .= ' ORDER BY m.nim';
 
-        $ambilMahasiswa = $pdo->prepare($sql);
-        $ambilMahasiswa->execute($parameter);
+        $sql .= ' ORDER BY pr.kode_produk';
 
-        $daftarMahasiswa = $ambilMahasiswa->fetchAll(
+
+        $ambilProduk = $pdo->prepare($sql);
+
+        $ambilProduk->execute($parameter);
+
+        $daftarProduk = $ambilProduk->fetchAll(
             \PDO::FETCH_ASSOC
         );
 
-        $ambilProdi = $pdo->prepare(
-            'SELECT id, nama_prodi
-             FROM program_studi
-             ORDER BY nama_prodi'
+
+        // AMBIL KATEGORI
+        $ambilKategori = $pdo->prepare(
+            'SELECT id, nama_kategori
+             FROM kategori_produk
+             ORDER BY nama_kategori'
         );
 
-        $ambilProdi->execute();
+        $ambilKategori->execute();
 
-        $daftarProgramStudi = $ambilProdi->fetchAll(
+        $daftarKategori = $ambilKategori->fetchAll(
             \PDO::FETCH_ASSOC
         );
 
-        return view('mahasiswa', compact(
-            'daftarMahasiswa',
-            'daftarProgramStudi',
+
+        return view('produk', compact(
+            'daftarProduk',
+            'daftarKategori',
             'kataKunci',
-            'programStudiId'
+            'kategoriProdukId'
         ));
+
+
     } catch (\Throwable $error) {
+
         report($error);
 
         return response(
@@ -73,210 +118,424 @@ Route::get('/mahasiswa', function (Request $request) {
             500
         );
     }
-})->name('mahasiswa.index');
+
+})->name('produk.index');
 
 
 // CREATE
-Route::post('/mahasiswa', function (Request $request) {
+Route::post('/produk', function (Request $request) {
+
     $data = $request->validate([
-        'nim' => ['required', 'string', 'max:20'],
-        'nama' => ['required', 'string', 'max:100'],
-        'email' => ['required', 'email', 'max:100'],
-        'usia' => ['required', 'integer', 'min:15', 'max:100'],
-        'program_studi_id' => ['required', 'integer'],
+
+        'kode_produk' => [
+            'required',
+            'string',
+            'size:10',
+            'regex:/^[A-Za-z0-9]+$/'
+        ],
+
+        'nama_produk' => [
+            'required',
+            'string',
+            'min:3',
+            'max:100'
+        ],
+
+        'sku' => [
+            'required',
+            'string',
+            'min:5',
+            'max:30'
+        ],
+
+        'stok' => [
+            'required',
+            'integer',
+            'min:0',
+            'max:500'
+        ],
+
+        'kategori_produk_id' => [
+            'required',
+            'integer'
+        ],
+
     ]);
 
+
     try {
+
         $pdo = DB::connection()->getPdo();
 
+
+        // CEK DUPLIKAT
         $cek = $pdo->prepare(
-            'SELECT COUNT(*) FROM mahasiswa
-             WHERE nim = :nim OR email = :email'
+            'SELECT COUNT(*)
+             FROM produk
+             WHERE kode_produk = :kode_produk
+                OR sku = :sku'
         );
+
 
         $cek->execute([
-            'nim' => $data['nim'],
-            'email' => $data['email']
+
+            'kode_produk' =>
+                $data['kode_produk'],
+
+            'sku' =>
+                $data['sku']
+
         ]);
 
+
         if ((int) $cek->fetchColumn() > 0) {
-            return back()->withInput()->with(
-                'gagal',
-                'NIM atau email sudah digunakan.'
-            );
+
+            return back()
+                ->withInput()
+                ->with(
+                    'gagal',
+                    'Kode produk atau SKU sudah digunakan.'
+                );
         }
 
+
+        // INSERT
         $simpan = $pdo->prepare(
-            'INSERT INTO mahasiswa
-             (nim, nama, email, usia, program_studi_id)
-             VALUES (:nim, :nama, :email, :usia, :program_studi_id)'
+            'INSERT INTO produk
+             (
+                kode_produk,
+                nama_produk,
+                sku,
+                stok,
+                kategori_produk_id
+             )
+             VALUES
+             (
+                :kode_produk,
+                :nama_produk,
+                :sku,
+                :stok,
+                :kategori_produk_id
+             )'
         );
 
-        $simpan->execute($data);
 
-        return redirect()->route('mahasiswa.index')->with(
-            'berhasil',
-            'Data mahasiswa berhasil ditambahkan.'
-        );
+        $simpan->execute([
+
+            'kode_produk' =>
+                $data['kode_produk'],
+
+            'nama_produk' =>
+                $data['nama_produk'],
+
+            'sku' =>
+                $data['sku'],
+
+            'stok' =>
+                $data['stok'],
+
+            'kategori_produk_id' =>
+                $data['kategori_produk_id']
+
+        ]);
+
+
+        return redirect()
+            ->route('produk.index')
+            ->with(
+                'berhasil',
+                'Data produk berhasil ditambahkan.'
+            );
+
+
     } catch (\Throwable $error) {
+
         report($error);
 
-        return back()->withInput()->with(
-            'gagal',
-            'Data gagal disimpan. Periksa koneksi dan data.'
-        );
+        return back()
+            ->withInput()
+            ->with(
+                'gagal',
+                'Data produk gagal disimpan. Periksa koneksi atau query.'
+            );
     }
-})->name('mahasiswa.store');
+
+})->name('produk.store');
 
 
 // EDIT
-Route::get('/mahasiswa/{id}/edit', function (int $id) {
+Route::get('/produk/{id}/edit', function (int $id) {
+
     try {
+
         $pdo = DB::connection()->getPdo();
 
-        $ambilMahasiswa = $pdo->prepare(
-            'SELECT id, nim, nama, email, usia, program_studi_id
-             FROM mahasiswa
+
+        $ambilProduk = $pdo->prepare(
+            'SELECT id,
+                    kode_produk,
+                    nama_produk,
+                    sku,
+                    stok,
+                    kategori_produk_id
+             FROM produk
              WHERE id = :id'
         );
 
-        $ambilMahasiswa->execute(['id' => $id]);
 
-        $mahasiswa = $ambilMahasiswa->fetch(
+        $ambilProduk->execute([
+            'id' => $id
+        ]);
+
+
+        $produk = $ambilProduk->fetch(
             \PDO::FETCH_ASSOC
         );
 
-        if (!$mahasiswa) {
-            return redirect()->route('mahasiswa.index')->with(
-                'gagal',
-                'Data mahasiswa tidak ditemukan.'
-            );
+
+        if (!$produk) {
+
+            return redirect()
+                ->route('produk.index')
+                ->with(
+                    'gagal',
+                    'Data produk tidak ditemukan.'
+                );
         }
 
-        $ambilProdi = $pdo->prepare(
-            'SELECT id, nama_prodi
-             FROM program_studi
-             ORDER BY nama_prodi'
+
+        $ambilKategori = $pdo->prepare(
+            'SELECT id, nama_kategori
+             FROM kategori_produk
+             ORDER BY nama_kategori'
         );
 
-        $ambilProdi->execute();
 
-        $daftarProgramStudi = $ambilProdi->fetchAll(
-            \PDO::FETCH_ASSOC
+        $ambilKategori->execute();
+
+
+        $daftarKategori =
+            $ambilKategori->fetchAll(
+                \PDO::FETCH_ASSOC
+            );
+
+
+        return view(
+            'produk-edit',
+            compact(
+                'produk',
+                'daftarKategori'
+            )
         );
 
-        return view('mahasiswa-edit', compact(
-            'mahasiswa',
-            'daftarProgramStudi'
-        ));
+
     } catch (\Throwable $error) {
+
         report($error);
 
-        return redirect()->route('mahasiswa.index')->with(
-            'gagal',
-            'Data gagal dibuka untuk diubah.'
-        );
+        return redirect()
+            ->route('produk.index')
+            ->with(
+                'gagal',
+                'Data produk gagal dibuka untuk diubah.'
+            );
     }
-})->name('mahasiswa.edit');
+
+})->name('produk.edit');
 
 
 // UPDATE
-Route::put('/mahasiswa/{id}', function (
+Route::put('/produk/{id}', function (
     Request $request,
     int $id
 ) {
+
     $data = $request->validate([
-        'nim' => ['required', 'string', 'max:20'],
-        'nama' => ['required', 'string', 'max:100'],
-        'email' => ['required', 'email', 'max:100'],
-        'usia' => ['required', 'integer', 'min:15', 'max:100'],
-        'program_studi_id' => ['required', 'integer'],
+
+        'kode_produk' => [
+            'required',
+            'string',
+            'size:10',
+            'regex:/^[A-Za-z0-9]+$/'
+        ],
+
+        'nama_produk' => [
+            'required',
+            'string',
+            'min:3',
+            'max:100'
+        ],
+
+        'sku' => [
+            'required',
+            'string',
+            'min:5',
+            'max:30'
+        ],
+
+        'stok' => [
+            'required',
+            'integer',
+            'min:0',
+            'max:500'
+        ],
+
+        'kategori_produk_id' => [
+            'required',
+            'integer'
+        ],
+
     ]);
 
+
     try {
+
         $pdo = DB::connection()->getPdo();
 
+
+        // CEK DUPLIKAT KECUALI DATA SENDIRI
         $cek = $pdo->prepare(
-            'SELECT COUNT(*) FROM mahasiswa
-             WHERE (nim = :nim OR email = :email)
-               AND id <> :id'
+            'SELECT COUNT(*)
+             FROM produk
+             WHERE
+                (
+                    kode_produk = :kode_produk
+                    OR sku = :sku
+                )
+                AND id <> :id'
         );
 
+
         $cek->execute([
-            'nim' => $data['nim'],
-            'email' => $data['email'],
-            'id' => $id,
+
+            'kode_produk' =>
+                $data['kode_produk'],
+
+            'sku' =>
+                $data['sku'],
+
+            'id' => $id
+
         ]);
 
+
         if ((int) $cek->fetchColumn() > 0) {
-            return back()->withInput()->with(
-                'gagal',
-                'NIM atau email sudah digunakan mahasiswa lain.'
-            );
+
+            return back()
+                ->withInput()
+                ->with(
+                    'gagal',
+                    'Kode produk atau SKU sudah digunakan produk lain.'
+                );
         }
 
+
+        // UPDATE
         $ubah = $pdo->prepare(
-            'UPDATE mahasiswa
-             SET nim = :nim,
-                 nama = :nama,
-                 email = :email,
-                 usia = :usia,
-                 program_studi_id = :program_studi_id
+            'UPDATE produk
+             SET
+                kode_produk = :kode_produk,
+                nama_produk = :nama_produk,
+                sku = :sku,
+                stok = :stok,
+                kategori_produk_id = :kategori_produk_id
              WHERE id = :id'
         );
 
+
         $ubah->execute([
-            'nim' => $data['nim'],
-            'nama' => $data['nama'],
-            'email' => $data['email'],
-            'usia' => $data['usia'],
-            'program_studi_id' => $data['program_studi_id'],
-            'id' => $id,
+
+            'kode_produk' =>
+                $data['kode_produk'],
+
+            'nama_produk' =>
+                $data['nama_produk'],
+
+            'sku' =>
+                $data['sku'],
+
+            'stok' =>
+                $data['stok'],
+
+            'kategori_produk_id' =>
+                $data['kategori_produk_id'],
+
+            'id' => $id
+
         ]);
 
-        return redirect()->route('mahasiswa.index')->with(
-            'berhasil',
-            'Data mahasiswa berhasil diperbarui.'
-        );
+
+        return redirect()
+            ->route('produk.index')
+            ->with(
+                'berhasil',
+                'Data produk berhasil diperbarui.'
+            );
+
+
     } catch (\Throwable $error) {
+
         report($error);
 
-        return back()->withInput()->with(
-            'gagal',
-            'Data gagal diperbarui. Periksa koneksi dan data.'
-        );
+        return back()
+            ->withInput()
+            ->with(
+                'gagal',
+                'Data produk gagal diperbarui. Periksa koneksi atau query.'
+            );
     }
-})->name('mahasiswa.update');
+
+})->name('produk.update');
 
 
 // DELETE
-Route::delete('/mahasiswa/{id}', function (int $id) {
+Route::delete('/produk/{id}', function (int $id) {
+
     try {
+
         $pdo = DB::connection()->getPdo();
 
+
         $hapus = $pdo->prepare(
-            'DELETE FROM mahasiswa WHERE id = :id'
+            'DELETE FROM produk
+             WHERE id = :id'
         );
 
-        $hapus->execute(['id' => $id]);
+
+        $hapus->execute([
+            'id' => $id
+        ]);
+
 
         if ($hapus->rowCount() === 0) {
-            return redirect()->route('mahasiswa.index')->with(
-                'gagal',
-                'Data mahasiswa tidak ditemukan.'
-            );
+
+            return redirect()
+                ->route('produk.index')
+                ->with(
+                    'gagal',
+                    'Data produk tidak ditemukan.'
+                );
         }
 
-        return redirect()->route('mahasiswa.index')->with(
-            'berhasil',
-            'Data mahasiswa berhasil dihapus.'
-        );
+
+        return redirect()
+            ->route('produk.index')
+            ->with(
+                'berhasil',
+                'Data produk berhasil dihapus.'
+            );
+
+
     } catch (\Throwable $error) {
+
         report($error);
 
-        return redirect()->route('mahasiswa.index')->with(
-            'gagal',
-            'Data gagal dihapus. Periksa relasi atau koneksi.'
-        );
+        return redirect()
+            ->route('produk.index')
+            ->with(
+                'gagal',
+                'Data gagal dihapus. Periksa koneksi atau relasi database.'
+            );
     }
-})->name('mahasiswa.destroy');
+
+})->name('produk.destroy');
